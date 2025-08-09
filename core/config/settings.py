@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -6,4 +8,7 @@ class Settings(BaseSettings):
     tg_token: str  # APP_TG_TOKEN=...
 
 
-settings = Settings()
+if TYPE_CHECKING:
+    settings: Settings
+else:
+    settings = Settings()
