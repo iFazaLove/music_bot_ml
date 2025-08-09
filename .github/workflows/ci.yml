@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [dev, main]
@@ -7,30 +6,38 @@ on:
     branches: [dev, main]
 
 jobs:
-  build-and-test:
+  Ruff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install poetry && poetry install
+      - run: poetry run ruff check .
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  Black:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install poetry && poetry install
+      - run: poetry run black --check .
 
-      - name: Install Poetry
-        run: pip install poetry
+  MyPy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install poetry && poetry install
+      - run: poetry run mypy .
 
-      - name: Install deps
-        run: poetry install --no-interaction
-
-      - name: Ruff check
-        run: poetry run ruff check .
-
-      - name: Format check (black)
-        run: poetry run black --check .
-
-      - name: MyPy
-        run: poetry run mypy .
-
-      - name: Pytest
-        run: poetry run pytest
+  Pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install poetry && poetry install
+      - run: poetry run pytest
