@@ -1,5 +1,6 @@
 # apps/bot/main.py
 import asyncio
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -21,11 +22,19 @@ async def cmd_start(m: Message) -> None:
     # лениво создаём таблицы при первом запуске
     init_db()
 
+    tg_user = m.from_user
+    if not tg_user:
+        await m.answer("Не удалось получить информацию о пользователе.")
+        return
+
+    uid = tg_user.id
+    username: Optional[str] = tg_user.username
+
     # upsert пользователя
     for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == m.from_user.id)).scalar_one_or_none()
+        user = s.execute(select(User).where(User.tg_id == uid)).scalar_one_or_none()
         if not user:
-            user = User(tg_id=m.from_user.id, username=m.from_user.username)
+            user = User(tg_id=uid, username=username)
             s.add(user)
             s.commit()
         break
