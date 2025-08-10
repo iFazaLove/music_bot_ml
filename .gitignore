@@ -137,6 +137,7 @@ env.bak/
 venv.bak/
 .DS_Store
 *.lock
+*.db
 
 # Spyder project settings
 .spyderproject
