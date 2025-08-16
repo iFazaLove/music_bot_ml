@@ -23,6 +23,15 @@ dp = Dispatcher()
 PAGE_LIMIT = 5  # по ТЗ — 5 треков на страницу
 
 
+def _start_menu_text() -> str:
+    return (
+        "Доступные команды:\n"
+        "• /my — список твоих треков (пагинация и поиск)\n"
+        "• Отправь аудио файлом — я сохраню его и добавлю в библиотеку\n"
+        "• /ping — проверить связь\n"
+    )
+
+
 @dp.message(Command("start"))
 async def cmd_start(m: Message) -> None:
     # лениво создаём таблицы при первом запуске
@@ -33,19 +42,21 @@ async def cmd_start(m: Message) -> None:
         await m.answer("Не удалось получить информацию о пользователе.")
         return
 
-    uid = tg_user.id
-    username: Optional[str] = tg_user.username
-
-    # upsert пользователя
     for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == uid)).scalar_one_or_none()
-        if not user:
-            user = User(tg_id=uid, username=username)
-            s.add(user)
-            s.commit()
-        break
+        existing: Optional[User] = s.execute(
+            select(User).where(User.tg_id == tg_user.id)
+        ).scalar_one_or_none()
 
-    await m.answer("Привет! Я сохранил тебя в базе. Напиши /ping.")
+        if existing is None:
+            # регаем нового
+            u = User(tg_id=tg_user.id, username=tg_user.username)
+            s.add(u)
+            s.commit()
+            await m.answer("Добро пожаловать! Я зарегистрировал тебя ✅\n\n" + _start_menu_text())
+        else:
+            # уже есть в базе
+            await m.answer("Ты уже зарегистрирован. 👌\n\n" + _start_menu_text())
+        break
 
 
 @dp.message(F.audio)
@@ -143,12 +154,9 @@ async def cmd_my(m: Message) -> None:
             await m.answer("Ничего не нашлось." if query else "Пока треков нет.")
             break
 
-        text_lines = [
-            header,
-            *(f"• {t.artist or 'Unknown'} — {t.title or 'Untitled'}" for t in items),
-        ]
+        header = f"Твои треки (поиск: <i>{query}</i>)" if query else "Твои треки:"
         await m.answer(
-            "\n".join(text_lines),
+            header,
             reply_markup=build_my_keyboard(items, offset, PAGE_LIMIT, has_more, query),
             disable_web_page_preview=True,
         )
@@ -157,14 +165,21 @@ async def cmd_my(m: Message) -> None:
 
 @dp.callback_query(F.data.startswith("my:page:"))
 async def cb_page(query: CallbackQuery) -> None:
-    # формат: my:page:<offset>:<q>
+    await query.answer()  # быстрый ACK, чтобы не протухло
+
+    data = query.data or ""
     try:
-        query.answer("Загружаю...")
-        _, _, off, q = query.data.split(":", 3)
+        _, _, off, q = data.split(":", 3)
         offset = int(off)
         search = None if q == "-" else q
     except Exception:
         await query.answer("Некорректная пагинация.", show_alert=True)
+        return
+
+    # сузить тип message
+    msg = query.message
+    if not isinstance(msg, Message):
+        await query.answer("Сообщение недоступно.", show_alert=True)
         return
 
     tg_user = query.from_user
@@ -189,33 +204,33 @@ async def cb_page(query: CallbackQuery) -> None:
             await query.answer("Страница пустая.", show_alert=True)
             break
 
-        text_lines = [
-            header,
-            *(f"• {t.artist or 'Unknown'} — {t.title or 'Untitled'}" for t in items),
-        ]
         try:
-            await query.message.edit_text(
-                "\n".join(text_lines),
+            await msg.edit_text(
+                header,
                 reply_markup=build_my_keyboard(items, offset, PAGE_LIMIT, has_more, search),
                 disable_web_page_preview=True,
             )
         except Exception:
-            # если текст совпал/изменения невозможны — просто обновим клавиатуру
-            await query.message.edit_reply_markup(
+            await msg.edit_reply_markup(
                 reply_markup=build_my_keyboard(items, offset, PAGE_LIMIT, has_more, search)
             )
-        await query.answer()
         break
 
 
 @dp.callback_query(F.data.startswith("my:play:"))
 async def cb_play(query: CallbackQuery) -> None:
-    # формат: my:play:<track_id>
+    await query.answer("Отправляю…", cache_time=1)
+
+    data = query.data or ""
     try:
-        await query.answer("Отправляю…", cache_time=1)
-        track_id = int(query.data.split(":")[2])
+        track_id = int(data.split(":")[2])
     except Exception:
         await query.answer("Некорректный трек.", show_alert=True)
+        return
+
+    msg = query.message
+    if not isinstance(msg, Message):
+        await query.answer("Сообщение недоступно.", show_alert=True)
         return
 
     tg_user = query.from_user
@@ -243,20 +258,19 @@ async def cb_play(query: CallbackQuery) -> None:
             break
 
         caption = f"{track.artist or 'Unknown'} — {track.title or 'Untitled'}  (ID: {track.id})"
-        await query.message.answer_audio(audio=audio, caption=caption)
-        await query.answer("Отправил трек ✅")
+        await msg.answer_audio(audio=audio, caption=caption)
         break
 
 
 @dp.callback_query(F.data == "my:close")
 async def cb_close(query: CallbackQuery) -> None:
-    # закрываем меню — удаляем сообщение с меню
-    try:
-        await query.message.delete()
-    except Exception:
-        # если нельзя удалить — хотя бы уберём клавиатуру
-        await query.message.edit_reply_markup(reply_markup=None)
-    await query.answer("Закрыто")
+    await query.answer()
+    msg = query.message
+    if isinstance(msg, Message):
+        try:
+            await msg.delete()
+        except Exception:
+            await msg.edit_reply_markup(reply_markup=None)
 
 
 def main() -> None:

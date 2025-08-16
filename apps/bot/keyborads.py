@@ -22,9 +22,9 @@ def build_my_keyboard(
         title = f"{t.artist or 'Unknown'} — {t.title or 'Untitled'}"
         kb.row(InlineKeyboardButton(text=title, callback_data=f"my:play:{t.id}"))
 
-    # 6-я строка — навигация
+    # 6-я — навигация
     q = (query or "").strip() or "-"
-    nav = []
+    nav: list[InlineKeyboardButton] = []
     if offset > 0:
         nav.append(
             InlineKeyboardButton(
@@ -38,7 +38,7 @@ def build_my_keyboard(
     if nav:
         kb.row(*nav)
 
-    # 7-я строка — закрыть
+    # 7-я — закрыть
     kb.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="my:close"))
 
     return kb.as_markup()

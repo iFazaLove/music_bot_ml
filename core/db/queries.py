@@ -9,7 +9,9 @@ from sqlalchemy.sql import Select
 from core.db.models import Track
 
 
-def _fetch_with_has_more(s: Session, stmt: Select[Track], limit: int) -> Tuple[list[Track], bool]:
+def _fetch_with_has_more(
+    s: Session, stmt: Select[Tuple[Track]], limit: int
+) -> Tuple[list[Track], bool]:
     """Выполнить stmt, получить limit+1 записей, вернуть первые limit и флаг has_more."""
     rows = s.execute(stmt.limit(limit + 1)).scalars().all()
     has_more = len(rows) > limit
