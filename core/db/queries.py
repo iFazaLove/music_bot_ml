@@ -15,7 +15,7 @@ def _fetch_with_has_more(
     """Выполнить stmt, получить limit+1 записей, вернуть первые limit и флаг has_more."""
     rows = s.execute(stmt.limit(limit + 1)).scalars().all()
     has_more = len(rows) > limit
-    return rows[:limit], has_more
+    return list(rows[:limit]), has_more
 
 
 def fetch_user_tracks(
