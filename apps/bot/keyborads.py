@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from core.db.models import Track
@@ -19,26 +19,26 @@ def build_my_keyboard(
 
     # 5 строк — треки
     for t in items:
-        title = f"{(t.artist or 'Unknown')} — {(t.title or 'Untitled')}"
-        kb.button(text=title, callback_data=f"my:play:{t.id}")
+        title = f"{t.artist or 'Unknown'} — {t.title or 'Untitled'}"
+        kb.row(InlineKeyboardButton(text=title, callback_data=f"my:play:{t.id}"))
 
     # 6-я строка — навигация
-    nav_row: list[tuple[str, str]] = []
-    q = query if (query and query.strip()) else "-"
+    q = (query or "").strip() or "-"
+    nav = []
     if offset > 0:
-        nav_row.append(("⬅️ Назад", f"my:page:{max(offset - limit, 0)}:{q}"))
-    if has_more:
-        nav_row.append(("➡️ Вперёд", f"my:page:{offset + limit}:{q}"))
-    if nav_row:
-        kb.row(
-            *[
-                kb.button(text=txt, callback_data=data).as_markup().inline_keyboard[0][0]
-                for txt, data in nav_row
-            ]
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️ Назад", callback_data=f"my:page:{max(offset - limit, 0)}:{q}"
+            )
         )
+    if has_more:
+        nav.append(
+            InlineKeyboardButton(text="➡️ Вперёд", callback_data=f"my:page:{offset + limit}:{q}")
+        )
+    if nav:
+        kb.row(*nav)
 
     # 7-я строка — закрыть
-    kb.button(text="❌ Закрыть", callback_data="my:close")
-    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="my:close"))
 
     return kb.as_markup()
