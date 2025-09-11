@@ -6,7 +6,7 @@ from typing import Optional
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, FSInputFile, Message
+from aiogram.types import BotCommand, CallbackQuery, FSInputFile, Message
 from sqlalchemy import select
 
 from apps.bot.init_db import init_db
@@ -28,8 +28,15 @@ def _start_menu_text() -> str:
         "Доступные команды:\n"
         "• /my — список твоих треков (пагинация и поиск)\n"
         "• Отправь аудио файлом — я сохраню его и добавлю в библиотеку\n"
-        "• /ping — проверить связь\n"
     )
+
+
+async def set_commands(bot: Bot) -> None:
+    commands = [
+        BotCommand(command="start", description="Начало работы"),
+        BotCommand(command="my", description="Мои треки"),
+    ]
+    await bot.set_my_commands(commands)
 
 
 @dp.message(Command("start"))
@@ -273,8 +280,13 @@ async def cb_close(query: CallbackQuery) -> None:
             await msg.edit_reply_markup(reply_markup=None)
 
 
+async def start() -> None:
+    await set_commands(bot)
+    await dp.start_polling(bot)
+
+
 def main() -> None:
-    asyncio.run(dp.start_polling(bot))
+    asyncio.run(start())
 
 
 if __name__ == "__main__":
