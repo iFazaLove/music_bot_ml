@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Float, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Float, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.db.base import Base
@@ -21,6 +21,11 @@ class User(Base):
 
 class Track(Base):
     __tablename__ = "tracks"
+    __table_args__ = (
+        Index("idx_tracks_title", "title"),
+        Index("idx_tracks_artist", "artist"),
+        Index("idx_tracks_likes_count", "likes_count"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     storage_path: Mapped[str] = mapped_column(String(1024), unique=True, index=True)

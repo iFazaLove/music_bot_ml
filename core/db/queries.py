@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -64,6 +64,16 @@ def get_track_by_storage_path(s: Session, storage_path: str) -> Optional[Track]:
     return s.execute(select(Track).where(Track.storage_path == storage_path)).scalar_one_or_none()
 
 
+def get_liked_track_ids(s: Session, user_id: int, track_ids: Iterable[int]) -> set[int]:
+    ids = list(track_ids)
+    if not ids:
+        return set()
+    rows = s.execute(
+        select(Like.track_id).where(Like.user_id == user_id, Like.track_id.in_(ids))
+    ).scalars()
+    return set(rows.all())
+
+
 def fetch_user_tracks_by_query(
     s: Session, user_id: int, query: str, offset: int, limit: int
 ) -> Tuple[list[Track], bool]:
@@ -114,4 +124,35 @@ def fetch_user_liked_tracks_by_query(
         .order_by(Like.created_at.desc(), Track.id.desc())
         .offset(offset)
     )
+    return _fetch_with_has_more(s, stmt, limit)
+
+
+def search_tracks_global(
+    s: Session,
+    q: Optional[str],
+    artist: Optional[str],
+    title: Optional[str],
+    offset: int,
+    limit: int,
+    sort: str = "recent",
+) -> Tuple[list[Track], bool]:
+    conditions = []
+    if artist:
+        conditions.append(Track.artist.like(f"%{artist}%"))
+    if title:
+        conditions.append(Track.title.like(f"%{title}%"))
+    if q:
+        like = f"%{q}%"
+        conditions.append(or_(Track.title.like(like), Track.artist.like(like)))
+
+    stmt: Select[tuple[Track]] = select(Track)
+    if conditions:
+        stmt = stmt.where(*conditions)
+
+    if sort == "popular":
+        stmt = stmt.order_by(Track.likes_count.desc(), Track.id.desc())
+    else:
+        stmt = stmt.order_by(Track.id.desc())
+
+    stmt = stmt.offset(offset)
     return _fetch_with_has_more(s, stmt, limit)

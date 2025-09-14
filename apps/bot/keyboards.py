@@ -65,3 +65,58 @@ def build_like_toggle_kb(
     text = "💔" if liked else "❤️"
     kb.button(text=text, callback_data=make_like_cb(track_id, ctx, offset, query))
     return kb.as_markup()
+
+
+def make_search_like_cb(track_id: int, offset: int, query: Optional[str], sort: str) -> str:
+    q = _short(query or "-")
+    s = sort or "recent"
+    return f"search:like:{track_id}:off:{offset}:q:{q}:s:{s}"
+
+
+def make_search_page_cb(offset: int, query: Optional[str], sort: str) -> str:
+    q = _short(query or "-")
+    s = sort or "recent"
+    return f"search:page:{offset}:q:{q}:s:{s}"
+
+
+def build_search_keyboard(
+    items: list[Track],
+    liked_ids: set[int],
+    offset: int,
+    limit: int,
+    has_more: bool,
+    query: Optional[str],
+    sort: str,
+) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+
+    for t in items:
+        title = f"{t.artist or 'Unknown'} — {t.title or 'Untitled'}"
+        play_btn = InlineKeyboardButton(text=f"▶️ {title}", callback_data=f"search:play:{t.id}")
+        heart = "❤️" if t.id in liked_ids else "🤍"
+        like_btn = InlineKeyboardButton(
+            text=heart, callback_data=make_search_like_cb(t.id, offset, query, sort)
+        )
+        kb.row(play_btn, like_btn)
+
+    # nav
+    nav: list[InlineKeyboardButton] = []
+    if offset > 0:
+        nav.append(
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=make_search_page_cb(max(offset - limit, 0), query, sort),
+            )
+        )
+    if has_more:
+        nav.append(
+            InlineKeyboardButton(
+                text="➡️ Вперёд", callback_data=make_search_page_cb(offset + limit, query, sort)
+            )
+        )
+    if nav:
+        kb.row(*nav)
+
+    kb.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="search:close"))
+
+    return kb.as_markup()
