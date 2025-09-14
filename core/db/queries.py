@@ -60,6 +60,10 @@ def fetch_user_tracks(
     return _fetch_with_has_more(s, stmt, limit)
 
 
+def get_track_by_storage_path(s: Session, storage_path: str) -> Optional[Track]:
+    return s.execute(select(Track).where(Track.storage_path == storage_path)).scalar_one_or_none()
+
+
 def fetch_user_tracks_by_query(
     s: Session, user_id: int, query: str, offset: int, limit: int
 ) -> Tuple[list[Track], bool]:
