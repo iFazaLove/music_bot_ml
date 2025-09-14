@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from typing import Iterator
 
 from sqlalchemy import create_engine
@@ -12,6 +13,7 @@ class Base(DeclarativeBase):
     pass
 
 
+@contextmanager
 def get_session() -> Iterator[Session]:
     with Session(engine) as s:
         yield s

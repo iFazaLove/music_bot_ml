@@ -7,10 +7,9 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command
 from aiogram.types import BotCommand, CallbackQuery, FSInputFile, Message
-from sqlalchemy import select
 
 from apps.bot.init_db import init_db
-from apps.bot.keyborads import build_my_keyboard
+from apps.bot.keyboards import build_my_keyboard
 from core.audio.metadata import extract_metadata
 from core.config.settings import settings
 from core.db.base import get_session
@@ -18,6 +17,10 @@ from core.db.models import Like, Track, User
 from core.db.queries import (
     fetch_user_liked_tracks,
     fetch_user_liked_tracks_by_query,
+    get_or_create_user,
+    get_user_by_tg_id,
+    get_user_track_by_id,
+    is_track_liked_by_user,
 )
 
 bot = Bot(token=settings.tg_token, default=DefaultBotProperties(parse_mode="HTML"))
@@ -52,21 +55,13 @@ async def cmd_start(m: Message) -> None:
         await m.answer("Не удалось получить информацию о пользователе.")
         return
 
-    for s in get_session():
-        existing: Optional[User] = s.execute(
-            select(User).where(User.tg_id == tg_user.id)
-        ).scalar_one_or_none()
-
+    with get_session() as s:
+        existing: Optional[User] = get_user_by_tg_id(s, tg_user.id)
         if existing is None:
-            # регаем нового
-            u = User(tg_id=tg_user.id, username=tg_user.username)
-            s.add(u)
-            s.commit()
+            _ = get_or_create_user(s, tg_user.id, tg_user.username)
             await m.answer("Добро пожаловать! Я зарегистрировал тебя ✅\n\n" + _start_menu_text())
         else:
-            # уже есть в базе
             await m.answer("Ты уже зарегистрирован. 👌\n\n" + _start_menu_text())
-        break
 
 
 @dp.message(F.audio)
@@ -108,13 +103,8 @@ async def handle_audio(m: Message) -> None:
     artist = meta.get("artist") or audio.performer or "Unknown artist"
 
     # 7) upsert пользователя и запись трека (как у тебя было)
-    for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == tg_user.id)).scalar_one_or_none()
-        if user is None:
-            user = User(tg_id=tg_user.id, username=tg_user.username)
-            s.add(user)
-            s.commit()
-            s.refresh(user)
+    with get_session() as s:
+        user = get_or_create_user(s, tg_user.id, tg_user.username)
 
         track = Track(
             storage_path=abs_path,
@@ -130,19 +120,13 @@ async def handle_audio(m: Message) -> None:
         s.commit()
         s.refresh(track)
 
-        existing_like = s.execute(
-            select(Track).where(Like.user_id == user.id, Like.track_id == track.id)
-        ).scalar_one_or_none()
-
-        # Авто-лайк
-        if existing_like is None:
+        # Авто-лайк, если ещё не лайкнут
+        if not is_track_liked_by_user(s, user.id, track.id):
             s.add(Like(user_id=user.id, track_id=track.id, source="auto_upload"))
-
             track.likes_count = (track.likes_count or 0) + 1
             s.commit()
 
         track_id = track.id
-        break
 
     await m.answer(
         f"Сохранил: <b>{artist} — {title}</b>\n"
@@ -163,11 +147,11 @@ async def cmd_my(m: Message) -> None:
     query: Optional[str] = parts[1].strip() if len(parts) == 2 else None
     offset = 0
 
-    for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == tg_user.id)).scalar_one_or_none()
+    with get_session() as s:
+        user = get_user_by_tg_id(s, tg_user.id)
         if user is None:
             await m.answer("Пользователь не найден.")
-            break
+            return
 
         if query:
             items, has_more = fetch_user_liked_tracks_by_query(
@@ -180,15 +164,13 @@ async def cmd_my(m: Message) -> None:
 
         if not items:
             await m.answer("Пока пусто — добавь первый трек или поставь лайк на существующий.")
-            break
+            return
 
-        header = f"Твои треки (поиск: <i>{query}</i>)" if query else "Твои треки:"
         await m.answer(
             header,
             reply_markup=build_my_keyboard(items, offset, PAGE_LIMIT, has_more, query),
             disable_web_page_preview=True,
         )
-        break
 
 
 @dp.callback_query(F.data.startswith("my:page:"))
@@ -215,11 +197,11 @@ async def cb_page(query: CallbackQuery) -> None:
         await query.answer("Нет пользователя.", show_alert=True)
         return
 
-    for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == tg_user.id)).scalar_one_or_none()
+    with get_session() as s:
+        user = get_user_by_tg_id(s, tg_user.id)
         if user is None:
             await query.answer("Пользователь не найден.", show_alert=True)
-            break
+            return
 
         if search:
             items, has_more = fetch_user_liked_tracks_by_query(
@@ -228,11 +210,11 @@ async def cb_page(query: CallbackQuery) -> None:
             header = f"Избранные треки (поиск: <i>{search}</i>):"
         else:
             items, has_more = fetch_user_liked_tracks(s, user.id, offset, PAGE_LIMIT)
-            header = "Ибранные треки:"
+            header = "Избранные треки:"
 
         if not items and offset > 0:
             await query.answer("Страница пустая.", show_alert=True)
-            break
+            return
 
         try:
             await msg.edit_text(
@@ -244,7 +226,6 @@ async def cb_page(query: CallbackQuery) -> None:
             await msg.edit_reply_markup(
                 reply_markup=build_my_keyboard(items, offset, PAGE_LIMIT, has_more, search)
             )
-        break
 
 
 @dp.callback_query(F.data.startswith("my:play:"))
@@ -268,28 +249,25 @@ async def cb_play(query: CallbackQuery) -> None:
         await query.answer("Нет пользователя.", show_alert=True)
         return
 
-    for s in get_session():
-        user = s.execute(select(User).where(User.tg_id == tg_user.id)).scalar_one_or_none()
+    with get_session() as s:
+        user = get_user_by_tg_id(s, tg_user.id)
         if user is None:
             await query.answer("Пользователь не найден.", show_alert=True)
-            break
+            return
 
-        track = s.execute(
-            select(Track).where(Track.id == track_id, Track.uploader_user_id == user.id)
-        ).scalar_one_or_none()
+        track = get_user_track_by_id(s, user.id, track_id)
         if track is None:
             await query.answer("Трек не найден.", show_alert=True)
-            break
+            return
 
         try:
             audio = FSInputFile(track.storage_path)
         except Exception:
             await query.answer("Файл отсутствует.", show_alert=True)
-            break
+            return
 
         caption = f"{track.artist or 'Unknown'} — {track.title or 'Untitled'}  (ID: {track.id})"
         await msg.answer_audio(audio=audio, caption=caption)
-        break
 
 
 @dp.callback_query(F.data == "my:close")
