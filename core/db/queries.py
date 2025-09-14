@@ -6,7 +6,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
-from core.db.models import Track
+from core.db.models import Like, Track
 
 
 def _fetch_with_has_more(
@@ -43,6 +43,42 @@ def fetch_user_tracks_by_query(
             or_(Track.title.like(like), Track.artist.like(like)),
         )
         .order_by(Track.id.desc())
+        .offset(offset)
+    )
+    return _fetch_with_has_more(s, stmt, limit)
+
+
+def fetch_user_liked_tracks(
+    s: Session, user_id: int, offset: int, limit: int
+) -> Tuple[list[Track], bool]:
+    """Только лайкнутые пользователем треки; сортировка по времени лайка (сначала новые)."""
+    stmt: Select[tuple[Track]] = (
+        select(Track)
+        .join(Like, Like.track_id == Track.id)
+        .where(Like.user_id == user_id)
+        .order_by(Like.created_at.desc(), Track.id.desc())
+        .offset(offset)
+    )
+    return _fetch_with_has_more(s, stmt, limit)
+
+
+def fetch_user_liked_tracks_by_query(
+    s: Session,
+    user_id: int,
+    query: str,
+    offset: int,
+    limit: int,
+) -> tuple[list[Track], bool]:
+    """Лайкнутые + фильтр по title/artist."""
+    like = f"%{query}%"
+    stmt: Select[tuple[Track]] = (
+        select(Track)
+        .join(Like, Like.track_id == Track.id)
+        .where(
+            Like.user_id == user_id,
+            or_(Track.title.like(like), Track.artist.like(like)),
+        )
+        .order_by(Like.created_at.desc(), Track.id.desc())
         .offset(offset)
     )
     return _fetch_with_has_more(s, stmt, limit)

@@ -14,8 +14,11 @@ from apps.bot.keyborads import build_my_keyboard
 from core.audio.metadata import extract_metadata
 from core.config.settings import settings
 from core.db.base import get_session
-from core.db.models import Track, User
-from core.db.queries import fetch_user_tracks, fetch_user_tracks_by_query
+from core.db.models import Like, Track, User
+from core.db.queries import (
+    fetch_user_liked_tracks,
+    fetch_user_liked_tracks_by_query,
+)
 
 bot = Bot(token=settings.tg_token, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
@@ -126,10 +129,26 @@ async def handle_audio(m: Message) -> None:
         s.add(track)
         s.commit()
         s.refresh(track)
+
+        existing_like = s.execute(
+            select(Track).where(Like.user_id == user.id, Like.track_id == track.id)
+        ).scalar_one_or_none()
+
+        # Авто-лайк
+        if existing_like is None:
+            s.add(Like(user_id=user.id, track_id=track.id, source="auto_upload"))
+
+            track.likes_count = (track.likes_count or 0) + 1
+            s.commit()
+
         track_id = track.id
         break
 
-    await m.answer(f"Сохранил: <b>{artist} — {title}</b>\nID трека: <code>{track_id}</code>")
+    await m.answer(
+        f"Сохранил: <b>{artist} — {title}</b>\n"
+        "Добавил в избранное ❤️ (можно снять лайк в /my)"
+        f"\nID трека: <code>{track_id}</code>"
+    )
 
 
 @dp.message(Command("my"))
@@ -151,14 +170,16 @@ async def cmd_my(m: Message) -> None:
             break
 
         if query:
-            items, has_more = fetch_user_tracks_by_query(s, user.id, query, offset, PAGE_LIMIT)
-            header = f"Твои треки (поиск: <i>{query}</i>):"
+            items, has_more = fetch_user_liked_tracks_by_query(
+                s, user.id, query, offset, PAGE_LIMIT
+            )
+            header = f"Избранные треки (поиск: <i>{query}</i>):"
         else:
-            items, has_more = fetch_user_tracks(s, user.id, offset, PAGE_LIMIT)
-            header = "Твои треки:"
+            items, has_more = fetch_user_liked_tracks(s, user.id, offset, PAGE_LIMIT)
+            header = "Избранные треки:"
 
         if not items:
-            await m.answer("Ничего не нашлось." if query else "Пока треков нет.")
+            await m.answer("Пока пусто — добавь первый трек или поставь лайк на существующий.")
             break
 
         header = f"Твои треки (поиск: <i>{query}</i>)" if query else "Твои треки:"
@@ -201,11 +222,13 @@ async def cb_page(query: CallbackQuery) -> None:
             break
 
         if search:
-            items, has_more = fetch_user_tracks_by_query(s, user.id, search, offset, PAGE_LIMIT)
-            header = f"Твои треки (поиск: <i>{search}</i>):"
+            items, has_more = fetch_user_liked_tracks_by_query(
+                s, user.id, search, offset, PAGE_LIMIT
+            )
+            header = f"Избранные треки (поиск: <i>{search}</i>):"
         else:
-            items, has_more = fetch_user_tracks(s, user.id, offset, PAGE_LIMIT)
-            header = "Твои треки:"
+            items, has_more = fetch_user_liked_tracks(s, user.id, offset, PAGE_LIMIT)
+            header = "Ибранные треки:"
 
         if not items and offset > 0:
             await query.answer("Страница пустая.", show_alert=True)
