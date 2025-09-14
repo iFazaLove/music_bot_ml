@@ -31,3 +31,17 @@ class Track(Base):
     bitrate: Mapped[int | None] = mapped_column(Integer)
     size: Mapped[int | None] = mapped_column(BigInteger)
     uploader_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+
+    likes_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class Like(Base):
+    __tablename__ = "likes"
+
+    # Составной первичный ключ
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    track_id: Mapped[int] = mapped_column(ForeignKey("tracks.id"), primary_key=True)
+
+    created_at: Mapped[datetime] = mapped_column(default=now_utc)
+
+    source: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
