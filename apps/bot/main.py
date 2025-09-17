@@ -11,7 +11,11 @@ from aiohttp.client_exceptions import ClientPayloadError
 from sqlalchemy import select
 
 from apps.bot.init_db import init_db
-from apps.bot.keyboards import build_like_toggle_kb, build_my_keyboard
+from apps.bot.keyboards import (
+    build_like_toggle_kb,
+    build_my_keyboard,
+    build_search_keyboard,
+)
 from core.audio.metadata import extract_metadata
 from core.config.settings import settings
 from core.db.base import get_session
@@ -19,11 +23,13 @@ from core.db.models import Like, Track, User
 from core.db.queries import (
     fetch_user_liked_tracks,
     fetch_user_liked_tracks_by_query,
+    get_liked_track_ids,
     get_or_create_user,
     get_track_by_storage_path,
     get_user_by_tg_id,
     get_user_track_by_id,
     is_track_liked_by_user,
+    search_tracks_global,
 )
 
 bot = Bot(token=settings.tg_token, default=DefaultBotProperties(parse_mode="HTML"))
@@ -44,6 +50,7 @@ async def set_commands(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="Начало работы"),
         BotCommand(command="my", description="Мои треки"),
+        BotCommand(command="search", description="Глобальный поиск"),
     ]
     await bot.set_my_commands(commands)
 
@@ -315,6 +322,237 @@ async def cb_play(query: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == "my:close")
 async def cb_close(query: CallbackQuery) -> None:
+    await query.answer()
+    msg = query.message
+    if isinstance(msg, Message):
+        try:
+            await msg.delete()
+        except Exception:
+            await msg.edit_reply_markup(reply_markup=None)
+
+
+def _parse_search_input(text: str) -> tuple[str | None, str | None, str, str, str]:
+    """Parse /search text into components.
+    Returns (search_q, display_q, artist, title, sort)
+    - display_q: raw query text without the command prefix (can include filters)
+    - sort: 'recent' or 'popular'
+    """
+    raw = (text or "").strip()
+    if raw.startswith("/search"):
+        raw = raw[len("/search") :].strip()
+    tokens = raw.split()
+    artist = ""
+    title = ""
+    sort = "recent"
+    free_tokens: list[str] = []
+    for token in tokens:
+        low = token.lower()
+        if low.startswith("artist:"):
+            artist = token.split(":", 1)[1]
+        elif low.startswith("title:"):
+            title = token.split(":", 1)[1]
+        elif low.startswith("sort:"):
+            s = token.split(":", 1)[1].lower()
+            if s in {"recent", "popular"}:
+                sort = s
+        elif low.startswith("tag:"):
+            # not implemented yet
+            pass
+        else:
+            free_tokens.append(token)
+    q = " ".join(free_tokens).strip() or None
+    display_q = raw or (q if q else None)
+    return q, display_q, artist, title, sort
+
+
+@dp.message(Command("search"))
+async def cmd_search(m: Message) -> None:
+    q, display_q, artist, title, sort = _parse_search_input(m.text or "")
+    if not (q or artist or title):
+        await m.answer(
+            "Использование: /search запрос | artist:... | title:... | sort:recent|popular\n"
+            "Примеры: /search beatles, /search artist:beatles title:yesterday sort:popular"
+        )
+        return
+
+    offset = 0
+    with get_session() as s:
+        user = get_or_create_user(
+            s,
+            m.from_user.id if m.from_user else 0,
+            m.from_user.username if m.from_user else None,
+        )
+        items, has_more = search_tracks_global(s, q, artist, title, offset, PAGE_LIMIT, sort)
+        if not items:
+            await m.answer("Ничего не найдено. Попробуй уточнить запрос.")
+            return
+        liked_ids = get_liked_track_ids(s, user.id, [t.id for t in items])
+        header = f"Найдено по: <i>{display_q}</i> (сортировка: {sort})"
+        await m.answer(
+            header,
+            reply_markup=build_search_keyboard(
+                items, liked_ids, offset, PAGE_LIMIT, has_more, display_q, sort
+            ),
+            disable_web_page_preview=True,
+        )
+
+
+@dp.callback_query(F.data.startswith("search:page:"))
+async def cb_search_page(query: CallbackQuery) -> None:
+    await query.answer()
+    data = query.data or ""
+    try:
+        # format: search:page:<offset>:q:<q>:s:<sort>
+        parts = data.split(":")
+        offset = int(parts[2])
+        params: dict[str, str] = {}
+        i = 3
+        while i + 1 < len(parts):
+            params[parts[i]] = parts[i + 1]
+            i += 2
+        q_raw = params.get("q", "-")
+        sort = params.get("s", "recent")
+        q, display_q, artist, title, sort2 = _parse_search_input(q_raw)
+        sort = sort or sort2
+    except Exception:
+        await query.answer("Некорректные данные.", show_alert=True)
+        return
+
+    msg = query.message
+    if not isinstance(msg, Message):
+        return
+
+    with get_session() as s:
+        user = get_or_create_user(
+            s,
+            query.from_user.id if query.from_user else 0,
+            query.from_user.username if query.from_user else None,
+        )
+        items, has_more = search_tracks_global(s, q, artist, title, offset, PAGE_LIMIT, sort)
+        if not items and offset > 0:
+            offset = max(0, offset - PAGE_LIMIT)
+            items, has_more = search_tracks_global(s, q, artist, title, offset, PAGE_LIMIT, sort)
+        liked_ids = get_liked_track_ids(s, user.id, [t.id for t in items])
+        header = f"Найдено по: <i>{display_q}</i> (сортировка: {sort})"
+        try:
+            await msg.edit_text(
+                header,
+                reply_markup=build_search_keyboard(
+                    items, liked_ids, offset, PAGE_LIMIT, has_more, display_q, sort
+                ),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await msg.edit_reply_markup(
+                reply_markup=build_search_keyboard(
+                    items, liked_ids, offset, PAGE_LIMIT, has_more, display_q, sort
+                )
+            )
+
+
+@dp.callback_query(F.data.startswith("search:play:"))
+async def cb_search_play(query: CallbackQuery) -> None:
+    await query.answer("Отправляю…", cache_time=1)
+    data = query.data or ""
+    try:
+        track_id = int(data.split(":")[2])
+    except Exception:
+        await query.answer("Некорректный трек.", show_alert=True)
+        return
+    msg = query.message
+    if not isinstance(msg, Message):
+        return
+    with get_session() as s:
+        track = s.get(Track, track_id)
+        if track is None:
+            await query.answer("Трек не найден.", show_alert=True)
+            return
+        try:
+            audio = FSInputFile(track.storage_path)
+        except Exception:
+            await query.answer("Файл отсутствует.", show_alert=True)
+            return
+        caption = f"{track.artist or 'Unknown'} — {track.title or 'Untitled'}  (ID: {track.id})"
+        await msg.answer_audio(audio=audio, caption=caption)
+
+
+@dp.callback_query(F.data.startswith("search:like:"))
+async def cb_search_like(query: CallbackQuery) -> None:
+    data = query.data or ""
+    parts = data.split(":")
+    try:
+        # search:like:<trackId>:off:<offset>:q:<q>:s:<sort>
+        track_id = int(parts[2])
+        params: dict[str, str] = {}
+        i = 3
+        while i + 1 < len(parts):
+            params[parts[i]] = parts[i + 1]
+            i += 2
+        offset = int(params.get("off", "0"))
+        q_raw = params.get("q", "-")
+        sort = params.get("s", "recent")
+        q, display_q, artist, title, sort2 = _parse_search_input(q_raw)
+        sort = sort or sort2
+    except Exception:
+        await query.answer("Некорректные данные.", show_alert=True)
+        return
+
+    msg = query.message
+    if not isinstance(msg, Message):
+        return
+
+    with get_session() as s:
+        user = get_or_create_user(
+            s,
+            query.from_user.id if query.from_user else 0,
+            query.from_user.username if query.from_user else None,
+        )
+        track = s.get(Track, track_id)
+        if track is None:
+            await query.answer("Трек не найден.", show_alert=True)
+            return
+        liked = is_track_liked_by_user(s, user.id, track.id)
+        if not liked:
+            s.add(Like(user_id=user.id, track_id=track.id, source="manual"))
+            track.likes_count = (track.likes_count or 0) + 1
+            s.commit()
+            toast = "Добавлено в избранное ❤️"
+        else:
+            like_obj = s.execute(
+                select(Like).where(Like.user_id == user.id, Like.track_id == track.id)
+            ).scalar_one_or_none()
+            if like_obj is not None:
+                s.delete(like_obj)
+                track.likes_count = max(0, (track.likes_count or 0) - 1)
+                s.commit()
+            toast = "Удалено из избранного 💔"
+
+        await query.answer(toast)
+
+        items, has_more = search_tracks_global(s, q, artist, title, offset, PAGE_LIMIT, sort)
+        if not items and offset > 0:
+            offset = max(0, offset - PAGE_LIMIT)
+            items, has_more = search_tracks_global(s, q, artist, title, offset, PAGE_LIMIT, sort)
+        liked_ids = get_liked_track_ids(s, user.id, [t.id for t in items])
+        header = f"Найдено по: <i>{display_q}</i> (сортировка: {sort})"
+        try:
+            await msg.edit_text(
+                header,
+                reply_markup=build_search_keyboard(
+                    items, liked_ids, offset, PAGE_LIMIT, has_more, display_q, sort
+                ),
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await msg.edit_reply_markup(
+                reply_markup=build_search_keyboard(
+                    items, liked_ids, offset, PAGE_LIMIT, has_more, display_q, sort
+                )
+            )
+
+
+@dp.callback_query(F.data == "search:close")
+async def cb_search_close(query: CallbackQuery) -> None:
     await query.answer()
     msg = query.message
     if isinstance(msg, Message):
