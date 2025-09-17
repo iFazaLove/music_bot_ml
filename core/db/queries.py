@@ -5,6 +5,7 @@ from typing import Iterable, Optional, Tuple
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 
 from core.db.models import Like, Track, User
 
@@ -136,7 +137,7 @@ def search_tracks_global(
     limit: int,
     sort: str = "recent",
 ) -> Tuple[list[Track], bool]:
-    conditions = []
+    conditions: list[ColumnElement[bool]] = []
     if artist:
         conditions.append(Track.artist.like(f"%{artist}%"))
     if title:
