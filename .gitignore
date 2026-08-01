@@ -172,3 +172,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Local project data
+music_bot.db
+music_bot.db-*
+data/
